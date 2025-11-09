@@ -1,0 +1,110 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Available downloads</title>
+  <style>
+    body { font-family: Arial, sans-serif; padding: 20px; max-width: 720px; margin: auto; }
+    table { width: 100%; border-collapse: collapse; margin-top: 10px;}
+    th, td { border-bottom: 1px solid #ddd; padding: 8px; text-align: left; }
+    button { padding: 6px 10px; }
+  </style>
+</head>
+<body>
+  <h2>Available files</h2>
+  <div>
+    <button id="logout">Logout</button>
+  </div>
+
+  <div style="margin-top:12px;">
+    <form id="uploadForm">
+      <input type="file" id="fileInput" name="file" />
+      <button type="submit">Upload (authenticated)</button>
+    </form>
+  </div>
+
+  <table id="filesTable">
+    <thead><tr><th>Name</th><th>Size</th><th>Action</th></tr></thead>
+    <tbody></tbody>
+  </table>
+
+  <script>
+    const token = localStorage.getItem('token');
+    if (!token) location.href = '/login.html';
+
+    document.getElementById('logout').onclick = () => {
+      localStorage.removeItem('token');
+      location.href = '/login.html';
+    };
+
+    async function fetchFiles() {
+      const res = await fetch('/api/files', { headers: { 'Authorization': 'Bearer ' + token } });
+      if (!res.ok) {
+        alert('Failed to fetch files. Logging out.');
+        localStorage.removeItem('token');
+        location.href = '/login.html';
+        return;
+      }
+      const data = await res.json();
+      const tbody = document.querySelector('#filesTable tbody');
+      tbody.innerHTML = '';
+      for (const f of data.files) {
+        const tr = document.createElement('tr');
+        const nameTd = document.createElement('td');
+        nameTd.textContent = f.originalName || f.filename;
+        const sizeTd = document.createElement('td');
+        sizeTd.textContent = (f.size / 1024).toFixed(1) + ' KB';
+        const actionTd = document.createElement('td');
+        const btn = document.createElement('button');
+        btn.textContent = 'Download';
+        btn.onclick = () => downloadFile(f.filename, f.originalName || f.filename);
+        actionTd.appendChild(btn);
+        tr.appendChild(nameTd); tr.appendChild(sizeTd); tr.appendChild(actionTd);
+        tbody.appendChild(tr);
+      }
+    }
+
+    async function downloadFile(filename, saveAs) {
+      const res = await fetch('/api/files/download/' + encodeURIComponent(filename), {
+        headers: { 'Authorization': 'Bearer ' + token }
+      });
+      if (!res.ok) {
+        alert('Download failed: ' + (await res.text()));
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = saveAs;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    }
+
+    // upload form
+    document.getElementById('uploadForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fileInput = document.getElementById('fileInput');
+      if (!fileInput.files.length) { alert('Choose a file'); return; }
+      const fd = new FormData();
+      fd.append('file', fileInput.files[0]);
+      const res = await fetch('/api/files/upload', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + token },
+        body: fd
+      });
+      const data = await res.json();
+      if (res.ok) {
+        alert('Uploaded: ' + data.originalName);
+        fetchFiles();
+      } else {
+        alert('Upload failed: ' + (data.error || JSON.stringify(data)));
+      }
+    });
+
+    fetchFiles();
+  </script>
+</body>
+</html>
