@@ -1,110 +1,99 @@
-<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <title>Available downloads</title>
-  <style>
-    body { font-family: Arial, sans-serif; padding: 20px; max-width: 720px; margin: auto; }
-    table { width: 100%; border-collapse: collapse; margin-top: 10px;}
-    th, td { border-bottom: 1px solid #ddd; padding: 8px; text-align: left; }
-    button { padding: 6px 10px; }
-  </style>
-</head>
-<body>
-  <h2>Available files</h2>
-  <div>
-    <button id="logout">Logout</button>
-  </div>
+from flask import Flask, request, jsonify, send_from_directory, render_template, redirect, url_for, session
+from werkzeug.security import generate_password_hash, check_password_hash
+import os, json
+from functools import wraps
 
-  <div style="margin-top:12px;">
-    <form id="uploadForm">
-      <input type="file" id="fileInput" name="file" />
-      <button type="submit">Upload (authenticated)</button>
-    </form>
-  </div>
+app = Flask(__name__)
+app.secret_key = 'change_this_secret_key'  # Change in production!
 
-  <table id="filesTable">
-    <thead><tr><th>Name</th><th>Size</th><th>Action</th></tr></thead>
-    <tbody></tbody>
-  </table>
+DATA_DIR = 'data'
+UPLOAD_DIR = 'uploads'
+USERS_FILE = os.path.join(DATA_DIR, 'users.json')
 
-  <script>
-    const token = localStorage.getItem('token');
-    if (!token) location.href = '/login.html';
+os.makedirs(DATA_DIR, exist_ok=True)
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-    document.getElementById('logout').onclick = () => {
-      localStorage.removeItem('token');
-      location.href = '/login.html';
-    };
+# initialize users file
+if not os.path.exists(USERS_FILE):
+    with open(USERS_FILE, 'w') as f:
+        json.dump({'users': []}, f)
 
-    async function fetchFiles() {
-      const res = await fetch('/api/files', { headers: { 'Authorization': 'Bearer ' + token } });
-      if (!res.ok) {
-        alert('Failed to fetch files. Logging out.');
-        localStorage.removeItem('token');
-        location.href = '/login.html';
-        return;
-      }
-      const data = await res.json();
-      const tbody = document.querySelector('#filesTable tbody');
-      tbody.innerHTML = '';
-      for (const f of data.files) {
-        const tr = document.createElement('tr');
-        const nameTd = document.createElement('td');
-        nameTd.textContent = f.originalName || f.filename;
-        const sizeTd = document.createElement('td');
-        sizeTd.textContent = (f.size / 1024).toFixed(1) + ' KB';
-        const actionTd = document.createElement('td');
-        const btn = document.createElement('button');
-        btn.textContent = 'Download';
-        btn.onclick = () => downloadFile(f.filename, f.originalName || f.filename);
-        actionTd.appendChild(btn);
-        tr.appendChild(nameTd); tr.appendChild(sizeTd); tr.appendChild(actionTd);
-        tbody.appendChild(tr);
-      }
-    }
+def load_users():
+    with open(USERS_FILE) as f:
+        return json.load(f)
 
-    async function downloadFile(filename, saveAs) {
-      const res = await fetch('/api/files/download/' + encodeURIComponent(filename), {
-        headers: { 'Authorization': 'Bearer ' + token }
-      });
-      if (!res.ok) {
-        alert('Download failed: ' + (await res.text()));
-        return;
-      }
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = saveAs;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
-    }
+def save_users(data):
+    with open(USERS_FILE, 'w') as f:
+        json.dump(data, f, indent=2)
 
-    // upload form
-    document.getElementById('uploadForm').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const fileInput = document.getElementById('fileInput');
-      if (!fileInput.files.length) { alert('Choose a file'); return; }
-      const fd = new FormData();
-      fd.append('file', fileInput.files[0]);
-      const res = await fetch('/api/files/upload', {
-        method: 'POST',
-        headers: { 'Authorization': 'Bearer ' + token },
-        body: fd
-      });
-      const data = await res.json();
-      if (res.ok) {
-        alert('Uploaded: ' + data.originalName);
-        fetchFiles();
-      } else {
-        alert('Upload failed: ' + (data.error || JSON.stringify(data)));
-      }
-    });
+def login_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if 'username' not in session:
+            return redirect(url_for('login_page'))
+        return f(*args, **kwargs)
+    return decorated
 
-    fetchFiles();
-  </script>
-</body>
-</html>
+@app.route('/')
+def index():
+    return redirect(url_for('login_page'))
+
+@app.route('/login', methods=['GET', 'POST'])
+def login_page():
+    if request.method == 'POST':
+        username = request.form.get('username')
+        password = request.form.get('password')
+
+        db = load_users()
+        user = next((u for u in db['users'] if u['username'] == username), None)
+        if user and check_password_hash(user['password_hash'], password):
+            session['username'] = username
+            return redirect(url_for('downloads_page'))
+        else:
+            return render_template('login.html', error="Invalid username or password")
+
+    return render_template('login.html')
+
+@app.route('/register', methods=['POST'])
+def register():
+    username = request.form.get('username')
+    password = request.form.get('password')
+
+    db = load_users()
+    if any(u['username'] == username for u in db['users']):
+        return render_template('login.html', error="Username already exists")
+
+    db['users'].append({
+        'username': username,
+        'password_hash': generate_password_hash(password)
+    })
+    save_users(db)
+    return render_template('login.html', message="Registered successfully! Now log in.")
+
+@app.route('/downloads')
+@login_required
+def downloads_page():
+    files = os.listdir(UPLOAD_DIR)
+    return render_template('downloads.html', files=files, username=session['username'])
+
+@app.route('/upload', methods=['POST'])
+@login_required
+def upload_file():
+    file = request.files.get('file')
+    if not file:
+        return redirect(url_for('downloads_page'))
+    file.save(os.path.join(UPLOAD_DIR, file.filename))
+    return redirect(url_for('downloads_page'))
+
+@app.route('/download/<filename>')
+@login_required
+def download(filename):
+    return send_from_directory(UPLOAD_DIR, filename, as_attachment=True)
+
+@app.route('/logout')
+def logout():
+    session.clear()
+    return redirect(url_for('login_page'))
+
+if __name__ == '__main__':
+    app.run(debug=True)
