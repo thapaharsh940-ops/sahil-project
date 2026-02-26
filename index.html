@@ -1,99 +1,88 @@
-from flask import Flask, request, jsonify, send_from_directory, render_template, redirect, url_for, session
-from werkzeug.security import generate_password_hash, check_password_hash
-import os, json
-from functools import wraps
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>University Notes Platform</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <nav id="sidebar" class="sidebar">
+        <div class="sidebar-header">
+            <span class="logo">📘 UniNotes</span>
+            <button id="sidebar-toggle">☰</button>
+        </div>
+        <ul class="nav-list">
+            <li class="nav-item" onclick="showDashboard('overview')">📊 Dashboard</li>
+            <li class="nav-item" onclick="showDashboard('allBranches')">📚 Browse</li>
+            <li class="nav-item" onclick="showDashboard('search')">🔍 Search</li>
+            <li class="nav-item" onclick="showDashboard('myUploads')">📤 My Uploads</li>
+            <li class="nav-item" onclick="showDashboard('savedNotes')">🔖 Saved Notes</li> <li class="nav-item danger" onclick="logout()">🚪 Logout</li>
+        </ul>
+    </nav>
 
-app = Flask(__name__)
-app.secret_key = 'change_this_secret_key'  # Change in production!
+    <div class="main-content">
+        <header>
+            <button id="mobile-menu-btn">☰</button>
+            <span id="header-title">University Notes</span>
+            <span id="user-bar"></span>
+        </header>
+        
+        <div id="modal-bg" class="modal-bg"></div>
+        <div id="auth-modal" class="modal-content small"></div>
+        <div id="preview-modal" class="modal-content"></div>
+        <div id="admin-modal" class="modal-content small"></div>
+        
+        <main id="dashboard-main">
+            <section id="overview" class="dashboard-section active">
+                <h2>Dashboard Overview</h2>
+                
+                <div id="recent-views-container" style="display:none; margin-bottom: 2em;">
+                    <h3>🕒 Recently Viewed</h3>
+                    <div id="recentViews" class="stats-row"></div>
+                </div>
 
-DATA_DIR = 'data'
-UPLOAD_DIR = 'uploads'
-USERS_FILE = os.path.join(DATA_DIR, 'users.json')
+                <div class="stats-row">
+                    <div class="stat-card"><h4>Total Docs</h4><div id="totalDocs">0</div></div>
+                    <div class="stat-card"><h4>Monthly</h4><div id="monthlyUploads">0</div></div>
+                    <div class="stat-card"><h4>Today</h4><div id="todayUploads">0</div></div>
+                    <div class="stat-card"><h4>My Uploads</h4><div id="myUploadsCount">0</div></div>
+                </div>
 
-os.makedirs(DATA_DIR, exist_ok=True)
-os.makedirs(UPLOAD_DIR, exist_ok=True)
+                <div style="display: flex; gap: 2em; flex-wrap: wrap; margin-top: 2em;">
+                    <div style="flex: 1; min-width: 300px;">
+                        <h3>Activity Log</h3>
+                        <ul id="activity-log" class="activity-list"></ul>
+                    </div>
+                    <div style="flex: 1; min-width: 300px;">
+                        <h3>🏆 Top Contributors</h3>
+                        <ul id="leaderboard-list" class="activity-list"></ul>
+                    </div>
+                </div>
+            </section>
+            
+            <section id="allBranches" class="dashboard-section"></section>
+            <section id="branchDetail" class="dashboard-section"></section>
+            <section id="semesterDetail" class="dashboard-section"></section>
+            <section id="sectionDetail" class="dashboard-section"></section>
+            <section id="subjectDetail" class="dashboard-section"></section>
+            <section id="search" class="dashboard-section">
+                <h2>Search</h2>
+                <input id="searchInput" class="search-box" placeholder="Search..." autocomplete="off">
+                <div id="subjectResults"></div>
+                <div id="searchResults"></div>
+            </section>
+            <section id="myUploads" class="dashboard-section"></section>
+            
+            <section id="savedNotes" class="dashboard-section">
+                <h2>🔖 Saved Notes</h2>
+                <div id="savedNotesList"></div>
+            </section>
+        </main>
+    </div>
 
-# initialize users file
-if not os.path.exists(USERS_FILE):
-    with open(USERS_FILE, 'w') as f:
-        json.dump({'users': []}, f)
-
-def load_users():
-    with open(USERS_FILE) as f:
-        return json.load(f)
-
-def save_users(data):
-    with open(USERS_FILE, 'w') as f:
-        json.dump(data, f, indent=2)
-
-def login_required(f):
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        if 'username' not in session:
-            return redirect(url_for('login_page'))
-        return f(*args, **kwargs)
-    return decorated
-
-@app.route('/')
-def index():
-    return redirect(url_for('login_page'))
-
-@app.route('/login', methods=['GET', 'POST'])
-def login_page():
-    if request.method == 'POST':
-        username = request.form.get('username')
-        password = request.form.get('password')
-
-        db = load_users()
-        user = next((u for u in db['users'] if u['username'] == username), None)
-        if user and check_password_hash(user['password_hash'], password):
-            session['username'] = username
-            return redirect(url_for('downloads_page'))
-        else:
-            return render_template('login.html', error="Invalid username or password")
-
-    return render_template('login.html')
-
-@app.route('/register', methods=['POST'])
-def register():
-    username = request.form.get('username')
-    password = request.form.get('password')
-
-    db = load_users()
-    if any(u['username'] == username for u in db['users']):
-        return render_template('login.html', error="Username already exists")
-
-    db['users'].append({
-        'username': username,
-        'password_hash': generate_password_hash(password)
-    })
-    save_users(db)
-    return render_template('login.html', message="Registered successfully! Now log in.")
-
-@app.route('/downloads')
-@login_required
-def downloads_page():
-    files = os.listdir(UPLOAD_DIR)
-    return render_template('downloads.html', files=files, username=session['username'])
-
-@app.route('/upload', methods=['POST'])
-@login_required
-def upload_file():
-    file = request.files.get('file')
-    if not file:
-        return redirect(url_for('downloads_page'))
-    file.save(os.path.join(UPLOAD_DIR, file.filename))
-    return redirect(url_for('downloads_page'))
-
-@app.route('/download/<filename>')
-@login_required
-def download(filename):
-    return send_from_directory(UPLOAD_DIR, filename, as_attachment=True)
-
-@app.route('/logout')
-def logout():
-    session.clear()
-    return redirect(url_for('login_page'))
-
-if __name__ == '__main__':
-    app.run(debug=True)
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="supabaseClient.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
